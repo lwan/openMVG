@@ -37,23 +37,21 @@ using namespace openMVG::geodesy;
 using namespace openMVG::image;
 using namespace openMVG::sfm;
 
+// Panoptic has rot + trans, but we need rot + center of rotation
 geometry::Pose3 RtToPose(panopticParams::rotTrans &extrinsics) {
   assert(extrinsics.rot.size() == 9);
   double *d = extrinsics.rot.data();
   double *t = extrinsics.trans.data();
   
-  Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> rot_mat(d);
+  Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor> > rot_mat(d);
   Eigen::Map<Eigen::Vector3d> trans_vec(t);
+  Eigen::Vector3d c_vec;
 
-  geometry::Pose3 pose(rot_mat, trans_vec);
+  // Convert rot, trans to center of rotation
+  c_vec = -rot_mat.transpose() * trans_vec;
+  
+  geometry::Pose3 pose(rot_mat, c_vec);
 
-  for (int c = 0; c != pose.rotation().cols(); ++c) {
-    for (int r = 0; r != pose.rotation().rows(); ++r) {
-      std::cout << pose.rotation()(r,c) << std::endl;
-    }
-    std::cout << std::endl;
-  }
-  getchar();
   return pose;
 }
 
@@ -296,7 +294,8 @@ int main(int argc, char **argv)
   sfm_data.s_root_path = sImageDir; // Setup main image root_path
   Views & views = sfm_data.views;
   Intrinsics & intrinsics = sfm_data.intrinsics;
-  IndexT num_cams = 0; // count number of cameras
+  Poses & poses = sfm_data.poses;
+  IndexT num_cam = 0; // count number of cameras
 
   C_Progress_display my_progress_bar( vec_image.size(),
       std::cout, "\n- Image listing -\n" );
@@ -305,18 +304,10 @@ int main(int argc, char **argv)
   
   for ( std::vector<std::string>::const_iterator iter_image = vec_image.begin();
     iter_image != vec_image.end();
-    ++iter_image, ++my_progress_bar )
+    ++iter_image, ++my_progress_bar, ++num_cam)
   {
-    ++num_cams;
-
-    std::cout << panopticParams::extrinsics.size() << std::endl;
-    std::cout << panopticParams::extrinsics[0].rot.size() << std::endl;
-    std::cout << panopticParams::extrinsics[0].trans.size() << std::endl;
-    getchar();
-
     // Read meta data to fill camera parameter (w,h,focal,ppx,ppy) fields.
     width = height = ppx = ppy = focal = -1.0;
-    std::cout << "size views: " << views.size() << std::endl;
 
     const std::string sImageFilename = stlplus::create_filespec( sImageDir, *iter_image );
     const std::string sImFilenamePart = stlplus::filename_part(sImageFilename);
@@ -352,9 +343,10 @@ int main(int argc, char **argv)
       if (!checkIntrinsicStringValidity(sKmatrix, focal, ppx, ppy))
         focal = -1.0;
     }
-    else // User provided focal length value
-      if (focal_pixels != -1 )
-        focal = focal_pixels;
+    else // Use panoptic data
+      std::cout << "using panoptic data!!" << std::endl;
+      if (!checkIntrinsicStringValidity(panopticParams::intrinsics[num_cam], focal, ppx, ppy))
+        
 
     // If not manually provided or wrongly provided
     if (focal == -1)
@@ -435,15 +427,14 @@ int main(int argc, char **argv)
       }
     }
 
+    // get extrinsics
+    geometry::Pose3 extrinsic = RtToPose(panopticParams::extrinsics[num_cam]);
+
     // Build the view corresponding to the image
     const std::pair<bool, Vec3> gps_info = checkGPS(sImageFilename, i_GPS_XYZ_method);
     if (gps_info.first && cmd.used('P'))
     {
       ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
-
-      // TODO update focal, pxx, pxy using checkIntrinscStringValidity
-      // TODO pull new intrinsics from vector into ^^
-      // TODO update sfm_data.intrinsics, poses with index
 
       // Add intrinsic related to the image (if any)
       if (intrinsic == nullptr)
@@ -485,6 +476,8 @@ int main(int argc, char **argv)
         // Add the defined intrinsic to the sfm_container
         intrinsics[v.id_intrinsic] = intrinsic;
         // add extrinsic as well
+        poses[v.id_pose] = extrinsic;
+        
       }
 
       // Add the view to the sfm_container
@@ -506,7 +499,7 @@ int main(int argc, char **argv)
     GroupSharedIntrinsics(sfm_data);
   }
 
-  // Store SfM_Data views & intrinsic data
+  // Store SfM_Data views & intrinsic & extrinsic data
   if (!Save(
     sfm_data,
     stlplus::create_filespec( sOutputDir, "sfm_data.json" ).c_str(),
