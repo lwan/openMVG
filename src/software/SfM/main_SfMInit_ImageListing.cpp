@@ -19,6 +19,8 @@
 #include "openMVG/sfm/sfm_view_priors.hpp"
 #include "openMVG/types.hpp"
 
+#include "openMVG/exif/panoptic_params.h"
+
 #include "third_party/cmdLine/cmdLine.h"
 #include "third_party/progress/progress_display.hpp"
 #include "third_party/stlplus3/filesystemSimplified/file_system.hpp"
@@ -34,6 +36,27 @@ using namespace openMVG::exif;
 using namespace openMVG::geodesy;
 using namespace openMVG::image;
 using namespace openMVG::sfm;
+
+geometry::Pose3 RtToPose(panopticParams::rotTrans &extrinsics) {
+  assert(extrinsics.rot.size() == 9);
+  double *d = extrinsics.rot.data();
+  double *t = extrinsics.trans.data();
+  
+  Eigen::Map<Eigen::Matrix<double, 3, 3, Eigen::RowMajor>> rot_mat(d);
+  Eigen::Map<Eigen::Vector3d> trans_vec(t);
+
+  geometry::Pose3 pose(rot_mat, trans_vec);
+
+  for (int c = 0; c != pose.rotation().cols(); ++c) {
+    for (int r = 0; r != pose.rotation().rows(); ++r) {
+      std::cout << pose.rotation()(r,c) << std::endl;
+    }
+    std::cout << std::endl;
+  }
+  getchar();
+  return pose;
+}
+
 
 /// Check that Kmatrix is a string like "f;0;ppx;0;f;ppy;0;0;1"
 /// With f,ppx,ppy as valid numerical value
@@ -273,16 +296,27 @@ int main(int argc, char **argv)
   sfm_data.s_root_path = sImageDir; // Setup main image root_path
   Views & views = sfm_data.views;
   Intrinsics & intrinsics = sfm_data.intrinsics;
+  IndexT num_cams = 0; // count number of cameras
 
   C_Progress_display my_progress_bar( vec_image.size(),
       std::cout, "\n- Image listing -\n" );
   std::ostringstream error_report_stream;
+
+  
   for ( std::vector<std::string>::const_iterator iter_image = vec_image.begin();
     iter_image != vec_image.end();
     ++iter_image, ++my_progress_bar )
   {
+    ++num_cams;
+
+    std::cout << panopticParams::extrinsics.size() << std::endl;
+    std::cout << panopticParams::extrinsics[0].rot.size() << std::endl;
+    std::cout << panopticParams::extrinsics[0].trans.size() << std::endl;
+    getchar();
+
     // Read meta data to fill camera parameter (w,h,focal,ppx,ppy) fields.
     width = height = ppx = ppy = focal = -1.0;
+    std::cout << "size views: " << views.size() << std::endl;
 
     const std::string sImageFilename = stlplus::create_filespec( sImageDir, *iter_image );
     const std::string sImFilenamePart = stlplus::filename_part(sImageFilename);
@@ -311,7 +345,6 @@ int main(int argc, char **argv)
     height = imgHeader.height;
     ppx = width / 2.0;
     ppy = height / 2.0;
-
 
     // Consider the case where the focal is provided manually
     if (sKmatrix.size() > 0) // Known user calibration K matrix
@@ -408,6 +441,10 @@ int main(int argc, char **argv)
     {
       ViewPriors v(*iter_image, views.size(), views.size(), views.size(), width, height);
 
+      // TODO update focal, pxx, pxy using checkIntrinscStringValidity
+      // TODO pull new intrinsics from vector into ^^
+      // TODO update sfm_data.intrinsics, poses with index
+
       // Add intrinsic related to the image (if any)
       if (intrinsic == nullptr)
       {
@@ -447,6 +484,7 @@ int main(int argc, char **argv)
       {
         // Add the defined intrinsic to the sfm_container
         intrinsics[v.id_intrinsic] = intrinsic;
+        // add extrinsic as well
       }
 
       // Add the view to the sfm_container
@@ -472,7 +510,7 @@ int main(int argc, char **argv)
   if (!Save(
     sfm_data,
     stlplus::create_filespec( sOutputDir, "sfm_data.json" ).c_str(),
-    ESfM_Data(VIEWS|INTRINSICS)))
+    ESfM_Data(VIEWS|EXTRINSICS|INTRINSICS)))
   {
     return EXIT_FAILURE;
   }
@@ -481,7 +519,8 @@ int main(int argc, char **argv)
     << "SfMInit_ImageListing report:\n"
     << "listed #File(s): " << vec_image.size() << "\n"
     << "usable #File(s) listed in sfm_data: " << sfm_data.GetViews().size() << "\n"
-    << "usable #Intrinsic(s) listed in sfm_data: " << sfm_data.GetIntrinsics().size() << std::endl;
+    << "usable #Intrinsic(s) listed in sfm_data: " << sfm_data.GetIntrinsics().size() << "\n"
+    << "usable #Extrinsic(s) listed in sfm_data: " << sfm_data.GetPoses().size() << std::endl;
 
   return EXIT_SUCCESS;
 }
