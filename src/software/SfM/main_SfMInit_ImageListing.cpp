@@ -346,7 +346,6 @@ int main(int argc, char **argv)
     else // Use panoptic data
       std::cout << "using cam" << num_cam << std::endl;
       if (!checkIntrinsicStringValidity(panopticParams::intrinsics_ceiling[num_cam], focal, ppx, ppy))
-        
 
     // If not manually provided or wrongly provided
     if (focal == -1)
@@ -428,6 +427,7 @@ int main(int argc, char **argv)
     }
 
     // get extrinsics
+
     geometry::Pose3 extrinsic = RtToPose(panopticParams::extrinsics_ceiling[num_cam]);
 
     // Build the view corresponding to the image
